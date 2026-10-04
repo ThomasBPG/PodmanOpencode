@@ -1,0 +1,139 @@
+#!/bin/sh
+# Isolated OpenCode in Podman. See docs/superpowers/specs/2026-09-07-isolated-opencode-podman-design.md
+set -eu
+
+IMAGE="ghcr.io/anomalyco/opencode:latest"
+VOLUME="opencode-isolated"
+NAME="opencode-isolated"
+ISOLATED="/isolated"
+
+usage() {
+  printf '%s\n' "usage: oc [PROJECT] [opencode-args...]" >&2
+  printf '%s\n' "  PROJECT  directory to mount at /workspace (default: cwd)" >&2
+  exit 2
+}
+
+die() {
+  printf '%s\n' "oc: $*" >&2
+  exit 1
+}
+
+if [ ! -t 0 ] || [ ! -t 1 ]; then
+  die "refusing to start: need a TTY (run from a terminal)"
+fi
+
+command -v podman >/dev/null 2>&1 || die "podman not found; install with: brew install podman"
+
+if ! podman info >/dev/null 2>&1; then
+  printf '%s\n' "oc: starting podman machine..." >&2
+  podman machine start || die "podman machine is not running; try: podman machine init && podman machine start"
+  # machine start can return before the API socket is up
+  i=0
+  while ! podman info >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 30 ]; then
+      die "podman machine started but is not ready; try: podman info"
+    fi
+    sleep 1
+  done
+fi
+
+PROJECT="${1:-.}"
+if [ $# -gt 0 ]; then
+  shift
+fi
+
+case "$PROJECT" in
+  -h|--help)
+    usage
+    ;;
+esac
+
+if [ ! -d "$PROJECT" ]; then
+  die "project is not a directory: $PROJECT"
+fi
+
+# macOS: pwd -P resolves the path without requiring GNU realpath
+PROJECT="$( (cd "$PROJECT" && pwd -P) )" || die "cannot resolve project path"
+
+if podman container exists "$NAME" >/dev/null 2>&1; then
+  die "container $NAME is already running; attach or: podman rm -f $NAME"
+fi
+
+if ! podman volume exists "$VOLUME" >/dev/null 2>&1; then
+  podman volume create "$VOLUME" >/dev/null
+fi
+
+# podman run only pulls when the image is missing locally, so refresh it on
+# every launch to keep a moving tag (like :latest) in step with upstream.
+podman pull "$IMAGE"
+
+# Seed isolated config/data dirs and enable autoupdate. Do not copy anything from the host.
+podman run --rm \
+  --security-opt label=disable \
+  -v "${VOLUME}:${ISOLATED}" \
+  "${IMAGE}" \
+  --version >/dev/null
+
+# The official image ENTRYPOINT is opencode, so seed with a one-shot override.
+podman run --rm --entrypoint /bin/sh \
+  --security-opt label=disable \
+  -v "${VOLUME}:${ISOLATED}" \
+  "${IMAGE}" \
+  -c 'mkdir -p /isolated/config /isolated/data /isolated/cache /isolated/state && if [ ! -f /isolated/config/opencode.json ]; then printf "%s\n" "{\"autoupdate\":true}" > /isolated/config/opencode.json; fi'
+
+# Mask project-local OpenCode config so cwd walk cannot load host-authored files.
+# Anonymous -v /workspace/FILE is rejected when the host path is a file
+# ("Not a directory") and creates host dirs when the path is missing.
+# Overlay only existing paths: /dev/null over files, anonymous volume over .opencode/.
+# Isolation env vars are always set. Remaining "$@" after PROJECT shift go to opencode.
+# --auto auto-approves permission prompts. Always first so user args still work.
+json_flag=
+json_spec=
+jsonc_flag=
+jsonc_spec=
+dot_flag=
+dot_spec=
+if [ -f "$PROJECT/opencode.json" ]; then
+  json_flag=-v
+  json_spec=/dev/null:/workspace/opencode.json:ro
+fi
+if [ -f "$PROJECT/opencode.jsonc" ]; then
+  jsonc_flag=-v
+  jsonc_spec=/dev/null:/workspace/opencode.jsonc:ro
+fi
+if [ -d "$PROJECT/.opencode" ]; then
+  dot_flag=-v
+  dot_spec=/workspace/.opencode
+fi
+
+stop_machine() {
+  podman machine stop >/dev/null 2>&1 || true
+}
+
+trap stop_machine EXIT INT TERM
+
+status=0
+podman run --rm -it \
+  --name "$NAME" \
+  --userns=keep-id \
+  --security-opt label=disable \
+  -v "${PROJECT}:/workspace:z" \
+  -v "${VOLUME}:${ISOLATED}" \
+  ${json_flag:+"$json_flag"} ${json_spec:+"$json_spec"} \
+  ${jsonc_flag:+"$jsonc_flag"} ${jsonc_spec:+"$jsonc_spec"} \
+  ${dot_flag:+"$dot_flag"} ${dot_spec:+"$dot_spec"} \
+  -e HOME="${ISOLATED}" \
+  -e XDG_CONFIG_HOME="${ISOLATED}/config" \
+  -e XDG_DATA_HOME="${ISOLATED}/data" \
+  -e XDG_CACHE_HOME="${ISOLATED}/cache" \
+  -e XDG_STATE_HOME="${ISOLATED}/state" \
+  -e OPENCODE_CONFIG="${ISOLATED}/config/opencode.json" \
+  -e OPENCODE_CONFIG_DIR="${ISOLATED}/config" \
+  -e OPENCODE_DISABLE_CLAUDE_CODE=true \
+  -w /workspace \
+  "$IMAGE" \
+  --auto \
+  "$@" || status=$?
+
+exit "$status"
