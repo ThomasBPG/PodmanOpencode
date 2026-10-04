@@ -6,7 +6,7 @@ FROM cgr.dev/chainguard/wolfi-base:latest
 # node, npm, python3, tsc (typescript), rg (ripgrep); bash and curl are
 # needed by many tools and by OpenCode's own workflows; coreutils provides
 # sha256sum, used to verify the OpenCode asset.
-RUN apk add --no-cache bash curl git jq file patch yq build-base nodejs npm python3 py3-pip typescript ripgrep wget coreutils
+RUN apk add --no-cache bash curl git jq file patch yq build-base nodejs npm python3 py3-pip typescript ripgrep wget coreutils tmux
 
 
 # OpenCode 2 (official standalone binary): the glibc variant (wolfi-base
