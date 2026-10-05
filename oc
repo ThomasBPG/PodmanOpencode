@@ -11,9 +11,10 @@ ISOLATED="/isolated"
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 
 usage() {
-  printf '%s\n' "usage: ocVers2 [--build] [PROJECT] [opencode-args...]" >&2
-  printf '%s\n' "  --build  rebuild the image first (refreshes wolfi-base + OpenCode)" >&2
-  printf '%s\n' "  PROJECT  directory to mount at /workspace (default: cwd)" >&2
+  printf '%s\n' "usage: ocVers2 [--build] [--update] [PROJECT] [opencode-args...]" >&2
+  printf '%s\n' "  --build   rebuild the image first (refreshes wolfi-base + OpenCode)" >&2
+  printf '%s\n' "  --update  update all installed package plugins (and their skills), then exit" >&2
+  printf '%s\n' "  PROJECT   directory to mount at /workspace (default: cwd)" >&2
   exit 2
 }
 
@@ -43,10 +44,14 @@ if ! podman info >/dev/null 2>&1; then
 fi
 
 BUILD=0
-if [ "${1:-}" = "--build" ]; then
-  BUILD=1
-  shift
-fi
+UPDATE=0
+while :; do
+  case "${1:-}" in
+    --build)  BUILD=1;  shift ;;
+    --update) UPDATE=1; shift ;;
+    *) break ;;
+  esac
+done
 
 PROJECT="${1:-.}"
 if [ $# -gt 0 ]; then
@@ -129,6 +134,37 @@ stop_machine() {
 }
 
 trap stop_machine EXIT INT TERM
+
+# Update all configured package plugins (npm/git) and the skills they bundle,
+# in a one-shot container. Runs before the TUI on every launch; --update exits
+# after it. A failed update on a normal launch only warns (e.g. no network),
+# so the TUI still starts. The service start/stop bracket the update: letting
+# plugin update auto-start its own service has been observed to retry a busy
+# port forever with no output.
+update_plugins() {
+  podman run --rm --entrypoint /bin/sh \
+    --security-opt label=disable \
+    -v "${VOLUME}:${ISOLATED}" \
+    -e HOME="${ISOLATED}" \
+    -e XDG_CONFIG_HOME="${ISOLATED}/config" \
+    -e XDG_DATA_HOME="${ISOLATED}/data" \
+    -e XDG_CACHE_HOME="${ISOLATED}/cache" \
+    -e XDG_STATE_HOME="${ISOLATED}/state" \
+    -e OPENCODE_CONFIG="${ISOLATED}/config/opencode.json" \
+    -e OPENCODE_CONFIG_DIR="${ISOLATED}/config" \
+    -e OPENCODE_DISABLE_CLAUDE_CODE=true \
+    "$IMAGE" \
+    -c 'opencode service start >/dev/null && opencode plugin update && opencode service stop'
+}
+
+if [ "$UPDATE" -eq 1 ]; then
+  update_plugins || die "plugin update failed"
+  exit 0
+fi
+
+if ! update_plugins; then
+  printf '%s\n' "ocVers2: plugin update failed; starting OpenCode anyway" >&2
+fi
 
 status=0
 podman run --rm -it \
