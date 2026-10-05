@@ -13,7 +13,7 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 usage() {
   printf '%s\n' "usage: ocVers2 [--build] [--update] [PROJECT] [opencode-args...]" >&2
   printf '%s\n' "  --build   rebuild the image first (refreshes wolfi-base + OpenCode)" >&2
-  printf '%s\n' "  --update  update all installed package plugins (and their skills), then exit" >&2
+  printf '%s\n' "  --update  update installed plugins and skills, then exit" >&2
   printf '%s\n' "  PROJECT   directory to mount at /workspace (default: cwd)" >&2
   exit 2
 }
@@ -135,16 +135,18 @@ stop_machine() {
 
 trap stop_machine EXIT INT TERM
 
-# Update all configured package plugins (npm/git) and the skills they bundle,
-# in a one-shot container. Runs before the TUI on every launch; --update exits
-# after it. A failed update on a normal launch only warns (e.g. no network),
-# so the TUI still starts. The service start/stop bracket the update: letting
-# plugin update auto-start its own service has been observed to retry a busy
-# port forever with no output.
-update_plugins() {
+# Update installed plugins and skills in a one-shot container. Runs before the
+# TUI on every launch; --update exits after it. A failed update on a normal
+# launch only warns (e.g. no network), so the TUI still starts. Both update
+# steps run even if the first fails; the one-shot exits nonzero if either did.
+# The service start/stop bracket the plugin update: letting plugin update
+# auto-start its own service has been observed to retry a busy port forever
+# with no output. The project is mounted so `npx skills update -p` sees it.
+update_plugins_and_skills() {
   podman run --rm --entrypoint /bin/sh \
     --security-opt label=disable \
     -v "${VOLUME}:${ISOLATED}" \
+    -v "${PROJECT}:/workspace:z" \
     -e HOME="${ISOLATED}" \
     -e XDG_CONFIG_HOME="${ISOLATED}/config" \
     -e XDG_DATA_HOME="${ISOLATED}/data" \
@@ -153,17 +155,18 @@ update_plugins() {
     -e OPENCODE_CONFIG="${ISOLATED}/config/opencode.json" \
     -e OPENCODE_CONFIG_DIR="${ISOLATED}/config" \
     -e OPENCODE_DISABLE_CLAUDE_CODE=true \
+    -w /workspace \
     "$IMAGE" \
-    -c 'opencode service start >/dev/null && opencode plugin update && opencode service stop'
+    -c 'rc=0; opencode service start >/dev/null && opencode plugin update && opencode service stop || rc=1; npx -y skills update -p -g || rc=1; exit $rc'
 }
 
 if [ "$UPDATE" -eq 1 ]; then
-  update_plugins || die "plugin update failed"
+  update_plugins_and_skills || die "plugin or skill update failed"
   exit 0
 fi
 
-if ! update_plugins; then
-  printf '%s\n' "ocVers2: plugin update failed; starting OpenCode anyway" >&2
+if ! update_plugins_and_skills; then
+  printf '%s\n' "ocVers2: plugin or skill update failed; starting OpenCode anyway" >&2
 fi
 
 status=0
