@@ -56,16 +56,26 @@ Refresh the base image and the OpenCode binary:
 ./oc --build /path/to/project
 ```
 
-Plugin and skill updates: before every launch, `./oc` runs `opencode plugin
-update` (configured package plugins, npm or git, and the skills they bundle)
-and `npx skills update -p -g` (skills managed by the skills CLI, project and
-global scopes) in a one-shot container. Local plugins and unmanaged
-file-based skills are not updated. If an update fails (e.g. no network),
-`./oc` warns and starts anyway.
+Plugin and skill updates: before every launch, `./oc` runs two updates in a
+one-shot container:
+
+- `opencode plugin update` — all configured package plugins (npm or git) and
+  the skills those plugins bundle. Pinned exact versions/commits are skipped
+  (OpenCode's own behavior).
+- `npx skills update -p -g` — all skills managed by the skills CLI, in both
+  project and global scope.
+
+Not updated: local plugins (plain files in the isolated config), skills not
+installed by the skills CLI, and the OpenCode binary itself — that is
+`./oc --build` / auto-update.
 
 ```
 ./oc --update             # just update plugins and skills, then exit
+./oc --update --build     # rebuild the image first, then update
 ```
+
+If an update fails (e.g. no network), `./oc` on a normal launch warns and
+starts the TUI anyway. `./oc --update` exits with an error instead.
 
 Reset is the same: `podman volume rm opencode-isolated`.
 
