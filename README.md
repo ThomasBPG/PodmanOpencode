@@ -1,6 +1,6 @@
 # Isolated OpenCode (Podman) for Mac
 
-Run OpenCode in a Linux container. The agent gets its own auth, skills,
+Run OpenCode in a Linux container on Mac. The agent gets its own auth, skills,
 and config. Your Mac's `~/.config/opencode` is never mounted.
 
 ## Once
@@ -69,6 +69,7 @@ Not updated: local plugins (plain files in the isolated config), skills not
 installed by the skills CLI, and the OpenCode binary itself — that is
 `./oc --build` / auto-update.
 
+Also available:
 ```
 ./oc --update             # just update plugins and skills, then exit
 ./oc --update --build     # rebuild the image first, then update
@@ -76,8 +77,6 @@ installed by the skills CLI, and the OpenCode binary itself — that is
 
 If an update fails (e.g. no network), `./oc` on a normal launch warns and
 starts the TUI anyway. `./oc --update` exits with an error instead.
-
-Reset is the same: `podman volume rm opencode-isolated`.
 
 ## Isolation
 
