@@ -3,11 +3,25 @@
 FROM cgr.dev/chainguard/wolfi-base:latest
 
 # Dev tooling baked into the image so it is present in every session:
-# node, npm, python3, tsc (typescript), rg (ripgrep); bash and curl are
-# needed by many tools and by OpenCode's own workflows; coreutils provides
-# sha256sum, used to verify the OpenCode asset.
-RUN apk add --no-cache bash curl git jq file patch yq build-base nodejs npm python3 py3-pip typescript ripgrep wget coreutils tmux
+# node, npm, python3, tsc (typescript), rg (ripgrep), rustup; bash and curl
+# are needed by many tools and by OpenCode's own workflows; coreutils
+# provides sha256sum, used to verify the OpenCode asset.
+RUN apk add --no-cache bash curl git jq file patch yq build-base nodejs npm python3 py3-pip typescript ripgrep wget coreutils tmux rustup
 
+# Rust toolchain: the wolfi rustup package only ships rustup-init, so the
+# stable toolchain is installed at build time into /root/.rustup. The symlinks
+# plus the CARGO_HOME/RUSTUP_HOME env vars keep rustup, cargo and rustc on
+# PATH at runtime even when the runtime HOME override moves $HOME off /root
+# (the rustup shims otherwise look for the toolchain under $HOME/.rustup).
+# The version checks fail the build if the toolchain is ever broken.
+ENV CARGO_HOME=/root/.cargo \
+    RUSTUP_HOME=/root/.rustup
+RUN set -eux; \
+    rustup-init -y --profile minimal --default-toolchain stable; \
+    mkdir -p /usr/local/bin; \
+    ln -sf /root/.cargo/bin/* /usr/local/bin; \
+    rustc --version; \
+    cargo --version
 
 # OpenCode 2 (official standalone binary): the glibc variant (wolfi-base
 # ships glibc as its runtime libc), placed where the default PATH finds it
